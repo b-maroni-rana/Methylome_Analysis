@@ -44,7 +44,7 @@ library('Gviz')
 Raw data has been processed previously and saved as a quantile normalized, probe filtered, genomic annotated ratio set. Here, the object loaded is __gr_filt.rda__.
 ```{r load gr_filt}
 # load normalized and filtered genomic ratio set
-load('/Volumes/CRDShared/GradyLab/Brett Maroni-Rana/methylation/radiogenomics/preprocessing/20211215_init/gr_filt.rda')
+load('gr_filt.rda')
 ```
 
 ## Data Exploration
