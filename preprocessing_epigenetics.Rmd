@@ -1,0 +1,303 @@
+---
+title: "Example - Epigenetic Differential Expression, Preprocessing"
+author: "Brett Maroni-Rana"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+```{r r enviro, echo = FALSE}
+## Prepare R Environment
+# load packages
+library(tidyverse)
+library(minfi)
+library(ggplot2)
+library(methyPre)
+library(RColorBrewer)
+```
+
+```{r wd, echo=TRUE}
+# set working directory
+#setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+```
+## Introduction
+This report is a preliminary analysis of Barrett's esophagus (BE) methylation data. It compares two groups, BE that does not develop into cancer and one that does. More specifically, non-dysplastic Barrett's (NDBE) and Barrett's samples before the patient developed esophageal adenocarcinoma (EAC). In this way, a comparison of a low risk group (NDBE) can be made to a high risk group (EAC). Differentially methylated probe analysis is performed.  
+  
+Here, preprocessing of the data takes place. In short, __minfi__ is used to load raw .idat, three different normalization processes were used and compared and finaly, data was filtered using a number of criteria. More information of the preprocessing can be found below.   
+  
+### Methylation Analysis Workflow 
+![figure 1. dmp work-flow](/Volumes/crdshared/GradyLab/Brett Maroni-Rana/4_ming/EDRN_BDL_prelim_data_BE_dmp/flowchart_ssp_pipeline.jpg)
+  
+## Load Data
+Raw data can be found here:  
+  
+  - /pathA/pathB/pathC/ImageData
+  - /pathX/pathY/pathZ/ImageData
+
+```{r load dataset 2, echo = FALSE}
+# load batch 1
+rg1 <- read.metharray.exp(base = "/Volumes/grady_w/GLADR/Runs/450k/InfiniumMeth450K_2013-08-09_BETRNet_AKaz/ImageData",
+                          recursive = T,
+                          force = T,
+                          verbose = T)
+
+```
+
+```{r dataset 2 dim}
+# raw .idat dimensions
+cat("Raw .idat Dimensions:",\n,dim(rg2))
+```
+Dataset 2 dimensions are __622399 x 168__, with 168 samples being present. The loading of this experiment needs optimizing. Reading 168 samples is slow, especially considering there are only 21 samples of interest. (load = 1 hour)
+  
+### Read Phenotypic Data
+```{r load sample sheets, echo=FALSE}
+## load sample sheets
+ssheet1 <- read.csv("../docs/Kaz_450KSample_May2012_and_October2012_BETRNet.csv", header = TRUE, skip = 7)
+ssheet2 <- read.csv("../docs/450KSample_ALL-BETRNet_Kaz_2013_07-18_FINAL.csv", header = TRUE, skip = 7)
+```
+
+```{r format sample sheets, echo=FALSE}
+## format sample sheets
+# sheet 1
+colnames(ssheet1) <- c("sample","well","batch","group","pool","array","slide")
+ssheet1 <- ssheet1 %>%
+  separate(col = 1, into = "sample", sep = "-.*") %>%
+  unite(sampleNames, array, slide, sep = "_", remove = FALSE)
+
+# sheet 2
+colnames(ssheet2) <- c("sample","well","batch","group","pool","array","slide")
+ssheet2 <- ssheet2 %>%
+  separate(col = 1, into = "sample", sep = "-.*") %>%
+  unite(sampleNames, array, slide, sep = "_", remove = FALSE)
+```
+  
+__Subset Samples__  
+There are a total of 21 samples of interest. The sample sheets will be subsetted according to the sample of interest "sample" number. Once subsetted, the rg set can be subset accordingly
+```{r subset samplesheet, echo=FALSE}
+### subset sample sheets
+# samples of interest
+samples_h_eac <- c("4247", "3969", "3976", "3978", "3980", "3990", "3996", "4118", "4128", "4130", "4131", "4139")
+samples_l_ndbe <- c("4232", "4220", "4231", "4248", "4230", "4235", "4221", "4223", "4123")
+samples_all <- c(samples_h_eac, samples_l_ndbe)
+
+# subset according to samples of interest
+ssheet1 <- subset(ssheet1, sample %in% samples_all)
+ssheet2 <- subset(ssheet2, sample %in% samples_all)
+```
+
+```{r preview samlpes, echo = TRUE}
+# preview data
+ssheet2$sample
+cat("Sample Sheet Dimensions:",\n,dim(ssheet2))
+ssheet2
+```
+It looks like all samples of interest are found within sample sheet2. This would also indicate that all samples of interest are found within rg2 object and experiment 2.  
+  
+Perhaps the same array was ran twice? OR all samples were ran through the software to "harmonize" all previous samples. All information is the same except the batch name format. For example, instead of May2012, it reads 12-May.  
+  
+Will move forward with only data from rg2 and experiment titled: __"Example_Experiment_Name"__
+  
+__Subset rgSet according to Samlpe Sheet__
+```{r subset rgSet}
+# subset rg2 according to sample sheets
+rg2 <- rg2[,sampleNames(rg2) %in% ssheet2$sampleNames]
+dim(rg2) # 622399     21
+sampleNames(rg2)
+```
+
+__Add Pheno Data + "Risk"__
+  
+Additional phenotypic data includes age, sex and batch of samples. Importantly, "risk" must be added to the pheno data according to samples of interest. The data is cleaned and harmonized before being added to the rgSet object. 
+
+```{r add pheno data, echo=FALSE}
+### add pheno data
+pheno1 <- read.xlsx("../docs/4-Brett_Summary_BETRNet_DNA_rev2013-10.xls", 1)
+pheno2 <- read.xlsx("../docs/4-Brett_Summary_BETRNet_DNA_rev2013-10.xls", 2)
+
+# harmonize name
+colnames(pheno1)[colnames(pheno1) == 'BETRNet.'] <- 'BETRNet'
+colnames(pheno2)[colnames(pheno2) == 'BETRnet..'] <- 'BETRNet'
+
+# merge by 'BETRnet'
+pheno <- merge(pheno1, pheno2, by = 'BETRNet')
+
+# adjust DNA.soln
+pheno$DNA.soln <- gsub("x", "", pheno$DNA.soln)
+colnames(pheno)[colnames(pheno) == 'DNA.soln'] <- 'sample'
+
+# merge pheno and sample sheet to include array information
+pheno <- merge(pheno, ssheet2, by = 'sample')
+
+# clean up pheno
+pheno <- pheno[,c(1:4,20:21,27,35,40,56:57,60)]
+
+# add risk factor
+pheno$risk <- "low_ndbe"
+pheno$risk[pheno$sample %in% samples_h_eac] <- "high_eac"
+```
+
+```{r preview pheno}
+# preview data
+table(pheno$sample, pheno$risk)
+```
+
+```{r add pheno to rgSet, echo=FALSE}
+### add pheno data to rg set
+colnames(rg2)
+rownames(pheno) <- pheno$sampleNames
+rownames(pheno)
+identical(sort(colnames(rg2)), sort(rownames(pheno))) # T
+pheno <- pheno[colnames(rg2),]
+pData(rg2) <- cbind(pData(rg2), pheno[,2:ncol(pheno)])
+
+# test if row names of pData(rg2) == sampleNames
+identical(colnames(rg2), pData(rg2)$sampleNames) # T, pData and pheno is matching up
+```
+__Write to .csv__
+  
+A .csv containing pheno data in this experiment is written to file. 
+  
+See: __example_pheno_data.csv__
+```{r write pheno to file, echo=FALSE}
+# write pheno data to .csv
+#write.csv(pheno, "example_pheno_data.csv")
+```
+Pheno data is written to file and added to rgSet object. QC, Normalization and Filtering is ran next.  
+_pheno data is not written in this example report_  
+  
+### Quality Control
+```{r qc report, echo=FALSE}
+# QC summary
+qc <- qcReport(rg2, sampNames=pheno$samples, sampGroups=pheno$risk, 
+         pdf="qc_raw_report.pdf")
+```
+See : 'qc_raw_report.pdf' for a detailed QC report
+```{r sample qc, warning=FALSE, message=FALSE}
+# QC sample and density plot
+mSet_raw <- preprocessRaw(rg2)
+qc <- getQC(mSet_raw)
+pdf('qc_raw_samples.pdf', height = 5, width = 10)
+par(mfrow=c(1,2))
+plotQC(qc)
+dev.off()
+plotQC(qc)
+```
+Looking at QC report 'qc_raw_report.pdf', samples look uniformly distributed, indicating a successful array run. Additionally, the sample qc figure is showing samples with good methylated and unmethylated intestines. No sample drops below the threshold.
+
+## Normalization
+Illumina methylation array technology has evoloved over time and incorporates two different types of probes into their Array system. Accounting for these technical differes is an important step in methylation analysis using Illumina Arrays. Therfore, probe normalization is performed with three methods and density plots created for each. More info on each normalization process is below.  
+  
+### SWAN Normalization
+__Subset-quantile Within Array Normalization (SWAN) : preprocessSWAN()__  
+  
+- Matches beta distributions of the Type I to Type II probes by applying a within-array quantile normalization separately for different subsets of probes.  
+- Input = rgSet or mSet, output = mSet
+```{r swan norm}
+# Illumina and SWAN normalization and plot
+datIlmn <- preprocessIllumina(rg2)
+mSet_swan <- preprocessSWAN(rg2, mSet = datIlmn) # output = MethylSet
+pdf('qc_swan_norm.pdf', height = 5, width = 10)
+par(mfrow=c(1,2))
+densityPlot(mSet_swan, main = "SWAN Normalized Density Plot")
+dev.off()
+densityPlot(mSet_swan, main = "SWAN Normalized Density Plot")
+```
+__Functional Normalization : preprocesesFunnorm()__  
+  
+- Uses internal control probes to infer  between-array technical variation by using the first two principal components of the control probes 
+- Recommended for samples with vast global differences, cancer/control
+- Input = RGChannelSet, output = GenomicRatioSet
+- Ready for down-stream analysis following normalization
+```{r fun norm}
+# Functional Normalization
+# works well for cancer/normal
+# samples in which are vastly different
+gRSet_fun <- preprocessFunnorm(rg2) # output = GenomicRatioSet
+densityPlot(getBeta(gRSet_fun), sampGroups=pheno$risk,
+            main="Functional Normalized", legend=FALSE)
+legend("top", legend = levels(factor(pheno$risk)), 
+       text.col=brewer.pal(8,"Dark2"))
+```
+__Stratified Quantile Normalization : preprocessesQuantile()__  
+  
+- Type II probes are quantile normalized across samples, then Type I probes are interpolated (estimated) to this reference distribution
+- Stratified normalization of meth and unmeth intensities (done separately)
+- Recommended for samples with subtle differences, possibly sub-typing
+- Input = RGChannelSet, output = GenomicRatioSet
+- Ready for down-stream analysis following normalization
+```{r quant norm}
+# Quantile Normalization
+# works well for samples with subtle differences
+# not so well for samples that are vastly different
+gRSet_quant <- preprocessQuantile(rg2) # output = GenomicRatioSet
+densityPlot(getBeta(gRSet_quant), sampGroups=pheno$risk,
+            main="Quantile Normalized", legend=FALSE)
+legend("top", legend = levels(factor(pheno$risk)), 
+       text.col=brewer.pal(8,"Dark2"))
+```
+Both SWAN and Functional normalization density plots look similar with tight densities at lower beta values and less tight at higher beta values. Quantile normalization does not have as tight densities at lower values, but improves at the higher end. These samples are from the same tissue type and exhibit Barrett's esophagus. Quantile normalization may prove to be the best method in this case and is used in subsequent analysis.
+
+### Filtering
+Filtering is performed by a number of methods. They are found below:  
+  
+__Poor Performing Probes : detP()__  
+  
+- Compares probe status with negative control and runs statistical test
+- P-value > 0.01 in more than 10% of samples is removed  
+```{r filt detP, echo=FALSE}
+# filter for poor performing probes
+cat("Dimensions of quantile normalized data: ", length(rownames(gRSet_quant))) # 485512     21
+detP <- detectionP(rg2)
+gRSet_quant <- gRSet_quant[rownames(detP),]
+
+# filter CpGs by detectable p-values
+identical(rownames(gRSet_quant), rownames(detP))
+identical(colnames(gRSet_quant), colnames(detP))
+detPcutoff <- 0.01
+detPpercent <- 0.1
+max(colMeans(detP > detPcutoff)) # 0.001538582
+failedCpG <- rownames(detP)[rowMeans(detP > detPcutoff) > detPpercent]
+cat("Remove",length(failedCpG), "undetected CpGs\n") # 801
+gfilt <- gRSet_quant[setdiff(rownames(gRSet_quant),failedCpG),]
+cat('Number of probes following detP:', length(rownames(gfilt))) # ..
+```
+__SNPs : dropLociWithSnps(), dropMethylationLoci()__ 
+  
+- SNP association with CpG sites causes variability and should be removed  
+  
+__X / Y :__ Gender related probes used for QC are removed  
+  
+__Cross Reactive Probes :__  
+  
+- Two papers outline cross reactive probes. These probes are removed depending on 450K or EPIC array
+- Chen et al 2013 (HM450 platform), and Pidsley et al 2016 (EPIC platform).
+```{r filt probes minfi, echo=FALSE}
+# map to genome
+# only for methylSet or ratioSet
+#gfilt <- mapToGenome(gfilt)
+
+# snps
+snps <- dropLociWithSnps(gfilt, snps = c("SBE", "CpG"))
+gfilt <- gfilt[snps,]
+cat("Removing", snps, "cpg probes containing SNPs...\n")
+
+# chr and snps
+chr <- dropMethylationLoci(gfilt, dropRS = T, dropCH = T)
+gfilt <- gfilt[chr,]
+cat("Removing", chr, "CH and SNP-assoc. probes...\n")
+
+# sex
+sex <- gfilt[minfi::getAnnotation(gfilt)$chr %in% c("chrX","chrY"),] 
+gfilt <- gfilt[!sex,]
+cat("Removing", sex, "chrX and chrY-assoc. probes...\n")
+
+# cross reactive
+data(chen_crxcg) # from methyPre
+cross <- gfilt[rownames(gfilt) %in% chen.crxcg,]
+gfilt <- gfilt[!cross,]
+cat("Removing", cross, "cross-reactive probes...\n")
+
+cat("After applying minfi filters,", nrow(gfilt), "CpGs remain\n") # ...
+save(gfilt, file='gfilt_grSet_EDRN_ndbe_eac.rda')
+```
+Post Normalization and Filtering, __426668__ CpG probes remain.  
