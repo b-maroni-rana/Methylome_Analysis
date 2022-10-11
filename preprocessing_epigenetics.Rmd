@@ -32,11 +32,10 @@ Here, preprocessing of the data takes place. In short, __minfi__ is used to load
 Raw data can be found here:  
   
   - /pathA/pathB/pathC/ImageData
-  - /pathX/pathY/pathZ/ImageData
 
 ```{r load dataset 2, echo = FALSE}
 # load batch 1
-rg1 <- read.metharray.exp(base = "/Volumes/grady_w/GLADR/Runs/450k/InfiniumMeth450K_2013-08-09_BETRNet_AKaz/ImageData",
+rg1 <- read.metharray.exp(base = "/pathA/pathB/pathC/ImageData",
                           recursive = T,
                           force = T,
                           verbose = T)
